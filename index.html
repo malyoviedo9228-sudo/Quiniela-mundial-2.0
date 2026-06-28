@@ -528,7 +528,8 @@ function setView(v){
   S.view=v;
   document.querySelectorAll('.nb').forEach((b,i)=>{
     b.classList.toggle('active',['picks','premios','bracket','admin'][i]===v||
-      (v==='ranking'&&['picks','premios','bracket','admin'][i]==='admin'&&S.adminLogged));
+      (v==='ranking'&&['picks','premios','bracket','admin'][i]==='admin'&&S.adminLogged)||
+      (v==='visor'&&['picks','premios','bracket','admin'][i]==='admin'&&S.adminLogged));
   });
   render();
 }
@@ -543,6 +544,10 @@ function render(){
   else if(S.view==='ranking'){
     if(!S.adminLogged){ app.innerHTML=renderAdminLoginForRanking(); return; }
     renderRankingAsync(); return;
+  }
+  else if(S.view==='visor'){
+    if(!S.adminLogged){ app.innerHTML=renderAdmin(); return; }
+    app.innerHTML=renderVisor(); return;
   }
   else app.innerHTML=renderAdmin();
 }
@@ -965,6 +970,135 @@ async function renderRankingAsync(){
   </div>`;
 }
 
+// ── VISOR ─────────────────────────────────────────────────────
+function renderVisor(){
+  const vName = S.visorPlayer || '';
+  const vData = S.visorData || null;
+
+  const selector = `
+  <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;flex-wrap:wrap;gap:8px">
+    <button class="btn btn-outline btn-sm" onclick="setView('admin')">← Volver al panel</button>
+    <div style="font-size:12px;color:var(--txt2)">👁️ Solo visible para el administrador</div>
+  </div>
+  <div class="card" style="margin-bottom:14px">
+    <div class="card-hdr">Ver quiniela de participante</div>
+    <div class="card-body">
+      <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center">
+        <select id="visor-select" style="flex:1;padding:9px 13px;border:1.5px solid var(--borde);border-radius:var(--r);font-family:var(--fb);font-size:14px;background:var(--gris);color:var(--negro)">
+          <option value="">— Selecciona un participante —</option>
+          ${S.players.map(p=>`<option value="${esc(p)}" ${p===vName?'selected':''}>${esc(p)}</option>`).join('')}
+        </select>
+        <button class="btn btn-primary" onclick="loadVisorPlayer(document.getElementById('visor-select').value)">Ver quiniela →</button>
+      </div>
+    </div>
+  </div>`;
+
+  if(!vName || !vData) return selector;
+
+  // Points summary
+  const totalPts = calcTotalPoints(vData.picks||{}, S.official, vData.awardPicks||{}, S.officialAwards);
+  const hasResults = Object.keys(S.official).length > 0;
+
+  // Build picks display per round
+  const roundCards = ROUNDS.map(r => {
+    const matches = BASE_MATCHES.filter(m => m.round === r.id);
+    const roundLocked = vData.locked || (vData.lockedRounds&&vData.lockedRounds[r.id]) || false;
+    const cards = matches.map(m => {
+      const pick = (vData.picks||{})[m.id] || {home:'',away:''};
+      const res = S.official[m.id];
+      const hn = getTeamName(m.id,'home'), an = getTeamName(m.id,'away');
+      const status = calcMatchStatus(pick, res);
+      const pts = status ? calcMatchPoints(pick, res, m.round) : null;
+      const phWin = Number(pick.home) > Number(pick.away);
+      const paWin = Number(pick.away) > Number(pick.home);
+      let cls = 'match', badge = '';
+      if(status==='exact'){cls='match correct';badge=`<div class="match-result-badge exact">⚽ Exacto +${pts}pts</div>`;}
+      else if(status==='winner'){cls='match partial';badge=`<div class="match-result-badge winner-ok">✓ Ganador +${pts}pts</div>`;}
+      else if(status==='miss'){cls='match wrong';badge=`<div class="match-result-badge miss">✗ Sin puntos</div>`;}
+      return `<div class="${cls}">
+        <div class="match-hdr"><span>J${m.slot}</span><span class="pts-badge">x${getRoundMult(r.id)}</span></div>
+        <div class="match-body">
+          <div class="teams-row">
+            <div class="team-name${phWin?' winner':paWin?' loser':''}" style="display:flex;align-items:center;justify-content:center;gap:4px;font-size:13px">${teamLabel(hn)}</div>
+            <div class="vs">VS</div>
+            <div class="team-name${paWin?' winner':phWin?' loser':''}" style="display:flex;align-items:center;justify-content:center;gap:4px;font-size:13px">${teamLabel(an)}</div>
+          </div>
+          <div class="score-row" style="margin-top:8px">
+            <div style="flex:1;text-align:center;font-family:var(--fd);font-size:28px;color:${phWin?'var(--verde)':paWin?'var(--rojo)':'var(--negro)'}">${pick.home!==''?pick.home:'—'}</div>
+            <div class="score-sep">—</div>
+            <div style="flex:1;text-align:center;font-family:var(--fd);font-size:28px;color:${paWin?'var(--verde)':phWin?'var(--rojo)':'var(--negro)'}">${pick.away!==''?pick.away:'—'}</div>
+          </div>
+          ${badge}
+        </div>
+      </div>`;
+    }).join('');
+
+    return `<div class="card" style="margin-bottom:14px">
+      <div class="card-hdr">${r.label} ${roundLocked?'🔒':''}<span>x${r.multiplier} · max +${3*r.multiplier}pts por partido</span></div>
+      <div class="card-body">
+        <div class="matches-grid">${cards}</div>
+      </div>
+    </div>`;
+  }).join('');
+
+  // Awards display
+  const awardsLocked = vData.locked || vData.lockedAwards || false;
+  const awardsCard = `<div class="card" style="margin-bottom:14px">
+    <div class="card-hdr">Premios Individuales ${awardsLocked?'🔒':''}</div>
+    <div class="card-body">
+      <div class="awards-grid">
+        ${AWARDS.map(a=>{
+          const pick = (vData.awardPicks||{})[a.id]||'';
+          const official = S.officialAwards[a.id]||'';
+          const isCorrect = official && pick && pick.trim().toLowerCase()===official.trim().toLowerCase();
+          const isWrong = official && pick && !isCorrect;
+          return `<div class="award-card${isCorrect?' correct':isWrong?' wrong':''}">
+            <div class="award-hdr">
+              <div class="award-icon">${a.icon}</div>
+              <div><div class="award-title">${a.label}</div><div style="font-size:11px;color:var(--txt2)">${a.desc}</div></div>
+              <div style="text-align:right;margin-left:auto"><div class="award-pts">${a.pts}</div><div class="award-pts-lbl">pts</div></div>
+            </div>
+            <div class="award-body">
+              <div style="padding:8px 12px;background:var(--gris);border-radius:var(--r);font-size:14px;font-weight:500;color:${pick?'var(--negro)':'var(--txt2)'}">
+                ${pick||'<em>Sin pronóstico</em>'}
+              </div>
+              ${isCorrect?`<div class="award-result hit">✓ Correcto +${a.pts}pts</div>`:''}
+              ${isWrong?`<div class="award-result miss">✗ Fue: ${esc(official)}</div>`:''}
+            </div>
+          </div>`;
+        }).join('')}
+      </div>
+    </div>
+  </div>`;
+
+  return `${selector}
+  <div class="card" style="margin-bottom:14px;background:var(--verde-dk)">
+    <div style="padding:14px 18px;display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:8px">
+      <div>
+        <div style="font-family:var(--fd);font-size:22px;color:var(--oro)">${esc(vName)}</div>
+        <div style="font-size:12px;color:#8eba9e;margin-top:2px">
+          ${BASE_MATCHES.filter(m=>(vData.picks||{})[m.id]&&vData.picks[m.id].home!==''&&vData.picks[m.id].away!=='').length}/${BASE_MATCHES.length} partidos ·
+          ${AWARDS.filter(a=>(vData.awardPicks||{})[a.id]&&vData.awardPicks[a.id].trim()).length}/${AWARDS.length} premios
+          ${vData.locked?'· 🔒 Bloqueado':''}
+        </div>
+      </div>
+      ${hasResults?`<div style="text-align:right"><div style="font-family:var(--fd);font-size:36px;color:var(--oro)">${totalPts}</div><div style="font-size:11px;color:#8eba9e">puntos totales</div></div>`:''}
+    </div>
+  </div>
+  ${roundCards}
+  ${awardsCard}`;
+}
+
+async function loadVisorPlayer(name){
+  if(!name) return;
+  S.visorPlayer = name;
+  S.visorData = null;
+  document.getElementById('app').innerHTML = '<div class="loading"><div class="spin"></div>Cargando quiniela de '+esc(name)+'...</div>';
+  const d = await api('getPicks', {name});
+  S.visorData = d.error ? null : d;
+  render();
+}
+
 function renderAdminLoginForRanking(){
   return `
   <div class="login-wrap">
@@ -1005,9 +1139,12 @@ function renderAdmin(){
   return `
   <div class="warn">⚙️ Panel del organizador — define los equipos, bloquea jugadores y registra resultados.</div>
 
-  <div style="margin-bottom:16px">
-    <button class="btn btn-gold" onclick="setView('ranking')" style="width:100%;font-size:15px;padding:12px">
-      🏆 Ver Clasificación General
+  <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:16px">
+    <button class="btn btn-gold" onclick="setView('ranking')" style="font-size:14px;padding:12px">
+      🏆 Ver Clasificación
+    </button>
+    <button class="btn btn-primary" onclick="setView('visor')" style="font-size:14px;padding:12px">
+      👁️ Ver Quiniela de Participante
     </button>
   </div>
 
