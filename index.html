@@ -470,6 +470,7 @@ async function loadMyPicks(){
     S.awardPicks=r.awardPicks||{};
     S.locked=r.locked||false;
     S.lockedRounds=r.lockedRounds||{};
+    S.lockedAwards=r.lockedAwards||false;
   }
 }
 
@@ -490,7 +491,7 @@ async function loadPlayers(){
         // Only fetch if we don't have fresh data already
         if(!S.playerLockData[name]){
           const d=await api('getPicks',{name});
-          S.playerLockData[name]={locked:d.locked||false,lockedRounds:d.lockedRounds||{}};
+          S.playerLockData[name]={locked:d.locked||false,lockedRounds:d.lockedRounds||{},lockedAwards:d.lockedAwards||false};
         }
       }));
     }
@@ -586,9 +587,16 @@ function handle(e) {
 
     if (p.action === 'savePicks') {
       const row = findOrCreate(sh, p.name);
+      // Check lock status BEFORE saving — do not overwrite lock columns
+      const currentLock = sh.getRange(row,3).getValue();
+      const currentRounds = sh.getRange(row,5).getValue();
+      const currentAwards = sh.getRange(row,6).getValue();
       sh.getRange(row, 2).setValue(p.picks);
-      sh.getRange(row, 3).setValue('open');
       sh.getRange(row, 4).setValue(p.awardPicks||'{}');
+      // Restore lock state (never let savePicks unlock)
+      if(currentLock) sh.getRange(row,3).setValue(currentLock);
+      if(currentRounds) sh.getRange(row,5).setValue(currentRounds);
+      if(currentAwards) sh.getRange(row,6).setValue(currentAwards);
       result = { ok: true };
 
     } else if (p.action === 'getPicks') {
@@ -598,9 +606,10 @@ function handle(e) {
           picks: JSON.parse(sh.getRange(row,2).getValue()||'{}'),
           locked: sh.getRange(row,3).getValue()==='locked',
           awardPicks: JSON.parse(sh.getRange(row,4).getValue()||'{}'),
-          lockedRounds: JSON.parse(sh.getRange(row,5).getValue()||'{}')
+          lockedRounds: JSON.parse(sh.getRange(row,5).getValue()||'{}'),
+          lockedAwards: sh.getRange(row,6).getValue()==='true'
         };
-      } else { result = { picks:{}, locked:false, awardPicks:{}, lockedRounds:{} }; }
+      } else { result = { picks:{}, locked:false, awardPicks:{}, lockedRounds:{}, lockedAwards:false }; }
 
     } else if (p.action === 'getPlayers') {
       const last = sh.getLastRow();
@@ -636,9 +645,10 @@ function handle(e) {
     } else if (p.action === 'setLock') {
       // p.lockData = JSON string: { locked: bool, lockedRounds: {R16:true,...} }
       const row = findOrCreate(sh, p.name);
-      const lockData = JSON.parse(p.lockData || '{"locked":false,"lockedRounds":{}}');
+      const lockData = JSON.parse(p.lockData || '{"locked":false,"lockedRounds":{},"lockedAwards":false}');
       sh.getRange(row,3).setValue(lockData.locked ? 'locked' : 'open');
       sh.getRange(row,5).setValue(JSON.stringify(lockData.lockedRounds || {}));
+      sh.getRange(row,6).setValue(lockData.lockedAwards ? 'true' : 'false');
       result = { ok: true, lockData };
     }
   } catch(err) { result = { error: err.message }; }
@@ -833,6 +843,7 @@ function renderPremios(){
   const hasOfficial = Object.keys(S.officialAwards).length > 0;
   const filled = AWARDS.filter(a=>S.awardPicks[a.id]&&S.awardPicks[a.id].trim()).length;
 
+  const awardsBlocked = S.locked || S.lockedAwards;
   const cards = AWARDS.map(a=>{
     const pick = S.awardPicks[a.id]||'';
     const official = S.officialAwards[a.id]||'';
@@ -858,7 +869,7 @@ function renderPremios(){
         <input type="text" class="award-input" placeholder="Escribe el nombre del jugador o equipo..."
           value="${esc(pick)}"
           oninput="S.awardPicks['${a.id}']=this.value"
-          ${S.locked?'disabled':''}>
+          ${awardsBlocked?'disabled':''}>
         ${badge}
       </div>
     </div>`;
@@ -875,7 +886,7 @@ function renderPremios(){
     </div>
   </div>
   <div class="awards-grid">${cards}</div>
-  ${!S.locked?`<div style="display:flex;justify-content:flex-end;margin-top:4px">
+  ${!awardsBlocked?`<div style="display:flex;justify-content:flex-end;margin-top:4px">
     <button class="btn btn-gold" onclick="savePicks()" ${S.saving?'disabled':''}>
       ${S.saving?'⏳ Guardando...':'💾 Guardar premios y pronósticos'}
     </button>
@@ -1055,28 +1066,38 @@ function renderAdmin(){
         <thead><tr>
           <th>Nombre</th>
           ${ROUNDS.map(r=>`<th style="text-align:center">${r.short}</th>`).join('')}
-          <th style="text-align:center">Todo</th>
+          <th style="text-align:center">🏅 Premios</th>
+          <th style="text-align:center">🔒 Todo</th>
         </tr></thead>
         <tbody id="lock-tbody">${S.players.map((name,idx)=>{
-          const ld = S.playerLockData[name]||{locked:false,lockedRounds:{}};
+          const ld = S.playerLockData[name]||{locked:false,lockedRounds:{},lockedAwards:false};
+          const awardsLocked = ld.locked || ld.lockedAwards || false;
           return `<tr>
             <td style="font-weight:500;white-space:nowrap;padding:8px 12px">${esc(name)}</td>
             ${ROUNDS.map(r=>{
-              const isLocked = ld.locked || ld.lockedRounds?.[r.id] || false;
+              const isLocked = ld.locked || (ld.lockedRounds&&ld.lockedRounds[r.id]) || false;
               return `<td style="text-align:center;padding:4px">
                 <button class="btn btn-sm ${isLocked?'btn-danger':'btn-outline'}"
                   onclick="adminToggleRoundLock(${idx},'${r.id}')"
                   title="${isLocked?'Desbloquear':'Bloquear'} ${r.label}"
-                  style="min-width:40px">
+                  style="min-width:38px">
                   ${isLocked?'🔒':'🔓'}
                 </button>
               </td>`;
             }).join('')}
             <td style="text-align:center;padding:4px">
+              <button class="btn btn-sm ${awardsLocked?'btn-danger':'btn-outline'}"
+                onclick="adminToggleAwardsLock(${idx})"
+                title="${awardsLocked?'Desbloquear premios':'Bloquear premios'}"
+                style="min-width:38px;${!awardsLocked?'border-color:#b39700;color:#b39700':''}">
+                ${awardsLocked?'🔒':'🏅'}
+              </button>
+            </td>
+            <td style="text-align:center;padding:4px">
               <button class="btn btn-sm ${ld.locked?'btn-danger':'btn-primary'}"
                 onclick="adminToggleLock(${idx})"
                 title="${ld.locked?'Desbloquear todo':'Bloquear todo'}"
-                style="min-width:60px">
+                style="min-width:56px">
                 ${ld.locked?'🔒 Todo':'🔓 Todo'}
               </button>
             </td>
@@ -1153,7 +1174,7 @@ async function adminSetLock(idx, newLockData){
   // Optimistic update first
   if(!S.playerLockData[name]) S.playerLockData[name]={locked:false,lockedRounds:{}};
   S.playerLockData[name] = {...newLockData};
-  if(name===S.playerName){S.locked=newLockData.locked;S.lockedRounds=newLockData.lockedRounds||{};}
+  if(name===S.playerName){S.locked=newLockData.locked;S.lockedRounds=newLockData.lockedRounds||{};S.lockedAwards=newLockData.lockedAwards||false;}
   renderAdminLockTable();
   // Then persist to server
   const r=await apiPost('setLock',{name, lockData:JSON.stringify(newLockData)});
@@ -1170,47 +1191,64 @@ async function adminSetLock(idx, newLockData){
 function adminToggleLock(idx){
   const name = S.players[idx];
   if(!name) return;
-  const ld = S.playerLockData[name]||{locked:false,lockedRounds:{}};
+  const ld = S.playerLockData[name]||{locked:false,lockedRounds:{},lockedAwards:false};
   const newLocked = !ld.locked;
-  // When unlocking all, also clear all round locks
-  adminSetLock(idx, {locked:newLocked, lockedRounds: newLocked ? ld.lockedRounds : {}});
+  adminSetLock(idx, {
+    locked: newLocked,
+    lockedRounds: newLocked ? ld.lockedRounds : {},
+    lockedAwards: newLocked ? ld.lockedAwards : false
+  });
 }
 
 function adminToggleRoundLock(idx, round){
   const name = S.players[idx];
   if(!name) return;
-  const ld = S.playerLockData[name]||{locked:false,lockedRounds:{}};
-  // Work with a copy of lockedRounds
+  const ld = S.playerLockData[name]||{locked:false,lockedRounds:{},lockedAwards:false};
   const newLockedRounds = {...(ld.lockedRounds||{})};
-  if(newLockedRounds[round]) { delete newLockedRounds[round]; }
-  else { newLockedRounds[round] = true; }
-  // Round lock works independently of global lock
-  adminSetLock(idx, {locked:ld.locked, lockedRounds:newLockedRounds});
+  if(newLockedRounds[round]) delete newLockedRounds[round];
+  else newLockedRounds[round] = true;
+  adminSetLock(idx, {locked:ld.locked, lockedRounds:newLockedRounds, lockedAwards:ld.lockedAwards||false});
+}
+
+function adminToggleAwardsLock(idx){
+  const name = S.players[idx];
+  if(!name) return;
+  const ld = S.playerLockData[name]||{locked:false,lockedRounds:{},lockedAwards:false};
+  adminSetLock(idx, {locked:ld.locked, lockedRounds:ld.lockedRounds||{}, lockedAwards:!(ld.lockedAwards||false)});
 }
 
 function renderAdminLockTable(){
   const tbody = document.getElementById('lock-tbody');
   if(!tbody) return;
   tbody.innerHTML = S.players.map((name,idx)=>{
-    const ld = S.playerLockData[name]||{locked:false,lockedRounds:{}};
+    const ld = S.playerLockData[name]||{locked:false,lockedRounds:{},lockedAwards:false};
+    const awardsLocked = ld.locked || ld.lockedAwards || false;
     return `<tr>
       <td style="font-weight:500;white-space:nowrap;padding:8px 12px">${esc(name)}</td>
       ${ROUNDS.map(r=>{
-        const isLocked = ld.locked || ld.lockedRounds?.[r.id] || false;
+        const isLocked = ld.locked || (ld.lockedRounds&&ld.lockedRounds[r.id]) || false;
         return `<td style="text-align:center;padding:4px">
           <button class="btn btn-sm ${isLocked?'btn-danger':'btn-outline'}"
             onclick="adminToggleRoundLock(${idx},'${r.id}')"
             title="${isLocked?'Desbloquear':'Bloquear'} ${r.label}"
-            style="min-width:40px">
+            style="min-width:38px">
             ${isLocked?'🔒':'🔓'}
           </button>
         </td>`;
       }).join('')}
       <td style="text-align:center;padding:4px">
+        <button class="btn btn-sm ${awardsLocked?'btn-danger':'btn-outline'}"
+          onclick="adminToggleAwardsLock(${idx})"
+          title="${awardsLocked?'Desbloquear premios':'Bloquear premios'}"
+          style="min-width:38px;${!awardsLocked?'border-color:#b39700;color:#b39700':''}">
+          ${awardsLocked?'🔒':'🏅'}
+        </button>
+      </td>
+      <td style="text-align:center;padding:4px">
         <button class="btn btn-sm ${ld.locked?'btn-danger':'btn-primary'}"
           onclick="adminToggleLock(${idx})"
           title="${ld.locked?'Desbloquear todo':'Bloquear todo'}"
-          style="min-width:60px">
+          style="min-width:56px">
           ${ld.locked?'🔒 Todo':'🔓 Todo'}
         </button>
       </td>
