@@ -602,14 +602,17 @@ function handle(e) {
       // Read lock state BEFORE any writes
       const currentLock   = sh.getRange(row,3).getValue() || 'open';
       const currentRounds = sh.getRange(row,5).getValue() || '{}';
-      const currentAwards = sh.getRange(row,6).getValue() || 'false';
+      const rawAwards = sh.getRange(row,6).getValue();
+      const currentAwards = (rawAwards===true || rawAwards==='true' || rawAwards==='TRUE') ? 'true' : 'false';
       // Save picks and awards picks only
       sh.getRange(row, 2).setValue(p.picks);
       sh.getRange(row, 4).setValue(p.awardPicks||'{}');
       // Always restore lock state — never let savePicks modify it
       sh.getRange(row,3).setValue(currentLock);
       sh.getRange(row,5).setValue(currentRounds);
-      sh.getRange(row,6).setValue(currentAwards);
+      const awardsCell2 = sh.getRange(row,6);
+      awardsCell2.setNumberFormat('@');
+      awardsCell2.setValue(currentAwards);
       result = { ok: true };
 
     } else if (p.action === 'getPicks') {
@@ -620,7 +623,7 @@ function handle(e) {
           locked: sh.getRange(row,3).getValue()==='locked',
           awardPicks: JSON.parse(sh.getRange(row,4).getValue()||'{}'),
           lockedRounds: JSON.parse(sh.getRange(row,5).getValue()||'{}'),
-          lockedAwards: sh.getRange(row,6).getValue()==='true'
+          lockedAwards: (function(v){ return v===true || v==='true' || v==='TRUE'; })(sh.getRange(row,6).getValue())
         };
       } else { result = { picks:{}, locked:false, awardPicks:{}, lockedRounds:{}, lockedAwards:false }; }
 
@@ -661,7 +664,10 @@ function handle(e) {
       const lockData = JSON.parse(p.lockData || '{"locked":false,"lockedRounds":{},"lockedAwards":false}');
       sh.getRange(row,3).setValue(lockData.locked ? 'locked' : 'open');
       sh.getRange(row,5).setValue(JSON.stringify(lockData.lockedRounds || {}));
-      sh.getRange(row,6).setValue(lockData.lockedAwards ? 'true' : 'false');
+      // Force column F as plain text so Sheets doesn't auto-convert "true"/"false" into a boolean
+      const awardsCell = sh.getRange(row,6);
+      awardsCell.setNumberFormat('@');
+      awardsCell.setValue(lockData.lockedAwards ? 'true' : 'false');
       result = { ok: true, lockData };
     }
   } catch(err) { result = { error: err.message }; }
