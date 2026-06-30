@@ -396,13 +396,20 @@ let S = {
 // Ganador correcto = 1pt × mult; Marcador exacto = 3pt × mult
 function getRoundMult(round){ return ROUNDS.find(r=>r.id===round)?.multiplier||1; }
 
+// result puede incluir penaltyWinner: 'home'|'away' si el partido se fue a penales
+function getRealWinner(result) {
+  if(result.penaltyWinner) return result.penaltyWinner; // penales deciden
+  return result.home > result.away ? 'home' : result.home < result.away ? 'away' : 'draw';
+}
+
 function calcMatchPoints(pick, result, round) {
-  if(!pick||!result) return 0;
+  if(!pick||!result||result.home===''||result.away==='') return 0;
   const mult = getRoundMult(round);
   const pickWinner = pick.home > pick.away ? 'home' : pick.home < pick.away ? 'away' : 'draw';
-  const resWinner  = result.home > result.away ? 'home' : result.home < result.away ? 'away' : 'draw';
-  if(pick.home===result.home && pick.away===result.away) return 3*mult; // exact
-  if(pickWinner===resWinner) return 1*mult; // correct winner
+  const resWinner = getRealWinner(result);
+  // Marcador exacto solo cuenta si coincide el resultado de 90 min (sin penales)
+  if(!result.penaltyWinner && pick.home===result.home && pick.away===result.away) return 3*mult;
+  if(pickWinner===resWinner) return 1*mult; // ganador correcto (considera penales)
   return 0;
 }
 
@@ -410,8 +417,9 @@ function calcMatchStatus(pick, result) {
   if(!pick||!result||result.home===''||result.away==='') return null;
   const ph=Number(pick.home), pa=Number(pick.away);
   const rh=Number(result.home), ra=Number(result.away);
-  if(ph===rh&&pa===ra) return 'exact';
-  const pw=ph>pa?'h':ph<pa?'a':'d', rw=rh>ra?'h':rh<ra?'a':'d';
+  const pw=ph>pa?'home':ph<pa?'away':'draw';
+  const rw=getRealWinner(result);
+  if(!result.penaltyWinner && ph===rh && pa===ra) return 'exact';
   if(pw===rw) return 'winner';
   return 'miss';
 }
@@ -593,16 +601,17 @@ function handle(e) {
 
     if (p.action === 'savePicks') {
       const row = findOrCreate(sh, p.name);
-      // Check lock status BEFORE saving — do not overwrite lock columns
-      const currentLock = sh.getRange(row,3).getValue();
-      const currentRounds = sh.getRange(row,5).getValue();
-      const currentAwards = sh.getRange(row,6).getValue();
+      // Read lock state BEFORE any writes
+      const currentLock   = sh.getRange(row,3).getValue() || 'open';
+      const currentRounds = sh.getRange(row,5).getValue() || '{}';
+      const currentAwards = sh.getRange(row,6).getValue() || 'false';
+      // Save picks and awards picks only
       sh.getRange(row, 2).setValue(p.picks);
       sh.getRange(row, 4).setValue(p.awardPicks||'{}');
-      // Restore lock state (never let savePicks unlock)
-      if(currentLock) sh.getRange(row,3).setValue(currentLock);
-      if(currentRounds) sh.getRange(row,5).setValue(currentRounds);
-      if(currentAwards) sh.getRange(row,6).setValue(currentAwards);
+      // Always restore lock state — never let savePicks modify it
+      sh.getRange(row,3).setValue(currentLock);
+      sh.getRange(row,5).setValue(currentRounds);
+      sh.getRange(row,6).setValue(currentAwards);
       result = { ok: true };
 
     } else if (p.action === 'getPicks') {
@@ -771,6 +780,8 @@ function renderMatchCard(m){
   else if(status==='winner'){cls='match partial';badge=`<div class="match-result-badge winner-ok">✓ Ganador correcto · +${pts}pts</div>`;}
   else if(status==='miss'){cls='match wrong';badge=`<div class="match-result-badge miss">✗ Sin puntos</div>`;}
 
+  const penInfo = (res&&res.penaltyWinner) ? `<div style="text-align:center;font-size:11px;color:var(--oro-dk);font-weight:600;margin-top:4px">⚽ Definido en penales · Ganó ${esc(res.penaltyWinner==='home'?hn:an)}</div>` : '';
+
   const phWin=Number(pick.home)>Number(pick.away), paWin=Number(pick.away)>Number(pick.home);
   const disA = roundLocked ? 'disabled' : '';
 
@@ -792,6 +803,7 @@ function renderMatchCard(m){
         <input type="number" class="score-input" min="0" max="30" value="${pick.away}" placeholder="0"
           oninput="setPick('${m.id}','away',this.value)" ${disA}>
       </div>
+      ${penInfo}
       ${roundLocked?`<div style="text-align:center;font-size:11px;color:var(--txt2);margin-top:6px">🔒 Esta fase está bloqueada</div>`:''}
       ${badge}
     </div>
@@ -1015,6 +1027,7 @@ function renderVisor(){
       if(status==='exact'){cls='match correct';badge=`<div class="match-result-badge exact">⚽ Exacto +${pts}pts</div>`;}
       else if(status==='winner'){cls='match partial';badge=`<div class="match-result-badge winner-ok">✓ Ganador +${pts}pts</div>`;}
       else if(status==='miss'){cls='match wrong';badge=`<div class="match-result-badge miss">✗ Sin puntos</div>`;}
+      const penInfo = (res&&res.penaltyWinner) ? `<div style="text-align:center;font-size:10px;color:var(--oro-dk);font-weight:600;margin-top:2px">⚽ Penales · Ganó ${esc(res.penaltyWinner==='home'?hn:an)}</div>` : '';
       return `<div class="${cls}">
         <div class="match-hdr"><span>J${m.slot}</span><span class="pts-badge">x${getRoundMult(r.id)}</span></div>
         <div class="match-body">
@@ -1028,6 +1041,7 @@ function renderVisor(){
             <div class="score-sep">—</div>
             <div style="flex:1;text-align:center;font-family:var(--fd);font-size:28px;color:${paWin?'var(--verde)':phWin?'var(--rojo)':'var(--negro)'}">${pick.away!==''?pick.away:'—'}</div>
           </div>
+          ${penInfo}
           ${badge}
         </div>
       </div>`;
@@ -1272,6 +1286,8 @@ function renderAdminResults(){
   return BASE_MATCHES.map(m=>{
     const res=S.official[m.id]||{home:'',away:''};
     const hn=getTeamName(m.id,'home'), an=getTeamName(m.id,'away');
+    const isTied = res.home!=='' && res.away!=='' && Number(res.home)===Number(res.away);
+    const pen = res.penaltyWinner||'';
     return `<div class="am">
       <div class="am-hdr">${m.round} · J${m.slot} <span>x${getRoundMult(m.round)}</span></div>
       <div class="am-body">
@@ -1284,6 +1300,14 @@ function renderAdminResults(){
             oninput="setOfficialScore('${m.id}','away',this.value)">
           <div class="am-team">${esc(an.length>14?an.slice(0,13)+'…':an)}</div>
         </div>
+        ${isTied?`<div style="margin-top:8px;padding-top:8px;border-top:1px dashed var(--borde)">
+          <div style="font-size:10px;font-weight:600;color:var(--oro-dk);text-transform:uppercase;letter-spacing:.5px;margin-bottom:5px">⚽ ¿Se fue a penales? Elige quién ganó:</div>
+          <div style="display:flex;gap:5px">
+            <button class="btn btn-sm ${pen==='home'?'btn-primary':'btn-outline'}" style="flex:1;font-size:11px" onclick="setPenaltyWinner('${m.id}','home')">${esc(hn.length>12?hn.slice(0,11)+'…':hn)} ganó</button>
+            <button class="btn btn-sm ${pen==='away'?'btn-primary':'btn-outline'}" style="flex:1;font-size:11px" onclick="setPenaltyWinner('${m.id}','away')">${esc(an.length>12?an.slice(0,11)+'…':an)} ganó</button>
+            ${pen?`<button class="btn btn-sm btn-outline" style="font-size:11px" onclick="setPenaltyWinner('${m.id}','')" title="Quitar">✕</button>`:''}
+          </div>
+        </div>`:''}
       </div>
     </div>`;
   }).join('');
@@ -1293,7 +1317,20 @@ function setTeam(matchId, side, val){
   S.teams={...S.teams,[matchId]:{...(S.teams[matchId]||{}),[side]:val}};
 }
 function setOfficialScore(matchId, side, val){
-  S.official={...S.official,[matchId]:{...(S.official[matchId]||{home:'',away:''}),[side]:val}};
+  const prev = S.official[matchId]||{home:'',away:''};
+  // If score changes and is no longer tied, clear penaltyWinner
+  const updated = {...prev,[side]:val};
+  if(updated.home!==updated.away) delete updated.penaltyWinner;
+  S.official={...S.official,[matchId]:updated};
+  render();
+}
+function setPenaltyWinner(matchId, side){
+  const prev = S.official[matchId]||{home:'',away:''};
+  const updated = {...prev};
+  if(side===''){ delete updated.penaltyWinner; }
+  else { updated.penaltyWinner = side; }
+  S.official={...S.official,[matchId]:updated};
+  render();
 }
 
 async function adminSaveTeams(){
