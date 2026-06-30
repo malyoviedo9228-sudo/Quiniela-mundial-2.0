@@ -496,12 +496,10 @@ async function loadPlayers(){
     S.players=r;
     document.getElementById('hero-p').textContent=r.length||'—';
     if(S.adminLogged){
+      // Always fetch fresh lock data from server (no stale cache)
       await Promise.all(r.map(async name=>{
-        // Only fetch if we don't have fresh data already
-        if(!S.playerLockData[name]){
-          const d=await api('getPicks',{name});
-          S.playerLockData[name]={locked:d.locked||false,lockedRounds:d.lockedRounds||{},lockedAwards:d.lockedAwards||false};
-        }
+        const d=await api('getPicks',{name});
+        S.playerLockData[name]={locked:d.locked||false,lockedRounds:d.lockedRounds||{},lockedAwards:d.lockedAwards||false};
       }));
     }
   }
@@ -510,7 +508,7 @@ async function loadPlayers(){
 async function refreshLockData(){
   await Promise.all(S.players.map(async name=>{
     const d=await api('getPicks',{name});
-    S.playerLockData[name]={locked:d.locked||false,lockedRounds:d.lockedRounds||{}};
+    S.playerLockData[name]={locked:d.locked||false,lockedRounds:d.lockedRounds||{},lockedAwards:d.lockedAwards||false};
   }));
 }
 
@@ -1211,7 +1209,7 @@ function renderAdmin(){
 
   <!-- PARTICIPANTES -->
   <div class="card" style="margin-bottom:16px">
-    <div class="card-hdr">Participantes y Bloqueo por Fase <small style="display:flex;align-items:center;gap:8px">${S.players.length} registrados <button onclick="refreshLockData().then(()=>render())" style="background:rgba(255,255,255,.15);border:none;color:#8eba9e;font-size:11px;padding:2px 8px;border-radius:4px;cursor:pointer">↻ Refrescar</button></small></div>
+    <div class="card-hdr">Participantes y Bloqueo por Fase <small style="display:flex;align-items:center;gap:8px">${S.players.length} registrados <button onclick="refreshLockData().then(()=>renderAdminLockTable())" style="background:rgba(255,255,255,.15);border:none;color:#8eba9e;font-size:11px;padding:2px 8px;border-radius:4px;cursor:pointer">↻ Refrescar</button></small></div>
     <div style="padding:0">
       ${S.players.length===0?'<div class="card-body"><div class="info">Sin participantes aún.</div></div>':
       `<div style="overflow-x:auto"><table class="ptable">
@@ -1347,7 +1345,7 @@ async function adminSetLock(idx, newLockData){
   const name = S.players[idx];
   if(!name) return;
   // Optimistic update first
-  if(!S.playerLockData[name]) S.playerLockData[name]={locked:false,lockedRounds:{}};
+  if(!S.playerLockData[name]) S.playerLockData[name]={locked:false,lockedRounds:{},lockedAwards:false};
   S.playerLockData[name] = {...newLockData};
   if(name===S.playerName){S.locked=newLockData.locked;S.lockedRounds=newLockData.lockedRounds||{};S.lockedAwards=newLockData.lockedAwards||false;}
   renderAdminLockTable();
@@ -1355,8 +1353,27 @@ async function adminSetLock(idx, newLockData){
   const r=await apiPost('setLock',{name, lockData:JSON.stringify(newLockData)});
   if(r&&r.error){
     toast('Error al guardar: '+r.error, true);
-    // Revert on error
     await refreshLockData();
+    renderAdminLockTable();
+    return;
+  }
+  // Verify it actually persisted by re-reading from server
+  const verify = await api('getPicks',{name});
+  if(!verify.error){
+    const persisted = {
+      locked: verify.locked||false,
+      lockedRounds: verify.lockedRounds||{},
+      lockedAwards: verify.lockedAwards||false
+    };
+    S.playerLockData[name] = persisted;
+    if(name===S.playerName){S.locked=persisted.locked;S.lockedRounds=persisted.lockedRounds;S.lockedAwards=persisted.lockedAwards;}
+    // Check if what we wanted matches what got saved
+    const matches = persisted.locked===newLockData.locked && persisted.lockedAwards===newLockData.lockedAwards;
+    if(!matches){
+      toast(`⚠️ ${name}: el cambio no se guardó correctamente, intenta de nuevo`, true);
+    } else {
+      toast(`${name} actualizado ✓`);
+    }
     renderAdminLockTable();
   } else {
     toast(`${name} actualizado ✓`);
