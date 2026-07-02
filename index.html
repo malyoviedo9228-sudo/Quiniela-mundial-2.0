@@ -498,25 +498,33 @@ async function loadOfficial(){
   if(!r.error){S.official=r.results||{};S.teams=r.teams||{};S.officialAwards=r.officialAwards||{};}
 }
 async function loadPlayers(){
-  const r=await api('getPlayers');
+  const r=await apiWithRetry('getPlayers');
   if(Array.isArray(r)){
     S.players=r;
     document.getElementById('hero-p').textContent=r.length||'—';
     if(S.adminLogged){
-      // Always fetch fresh lock data from server (no stale cache)
-      await Promise.all(r.map(async name=>{
-        const d=await api('getPicks',{name});
-        S.playerLockData[name]={locked:d.locked||false,lockedRounds:d.lockedRounds||{},lockedAwards:d.lockedAwards||false};
-      }));
+      // Fetch sequentially to avoid GAS rate limits
+      for(const name of r){
+        const d=await apiWithRetry('getPicks',{name});
+        S.playerLockData[name]={
+          locked:d.locked||false,
+          lockedRounds:d.lockedRounds||{},
+          lockedAwards:d.lockedAwards||false
+        };
+      }
     }
   }
 }
 
 async function refreshLockData(){
-  await Promise.all(S.players.map(async name=>{
-    const d=await api('getPicks',{name});
-    S.playerLockData[name]={locked:d.locked||false,lockedRounds:d.lockedRounds||{},lockedAwards:d.lockedAwards||false};
-  }));
+  for(const name of S.players){
+    const d=await apiWithRetry('getPicks',{name});
+    S.playerLockData[name]={
+      locked:d.locked||false,
+      lockedRounds:d.lockedRounds||{},
+      lockedAwards:d.lockedAwards||false
+    };
+  }
 }
 
 // ── HELPERS ───────────────────────────────────────────────────
@@ -955,36 +963,60 @@ function renderBracket(){
 }
 
 // ── RANKING ───────────────────────────────────────────────────
+async function apiWithRetry(action, data={}, retries=3){
+  for(let i=0; i<retries; i++){
+    const r = await api(action, data);
+    if(!r.error) return r;
+    if(i<retries-1) await new Promise(res=>setTimeout(res, 500*(i+1)));
+  }
+  return {error:'max retries reached'};
+}
+
 async function renderRankingAsync(){
   document.getElementById('app').innerHTML='<div class="loading"><div class="spin"></div>Cargando ranking...</div>';
-  const [pr,or]=await Promise.all([api('getPlayers'),api('getResults')]);
-  const players=Array.isArray(pr)?pr:[];
-  const official=(or&&!or.error)?or.results||{}:{};
-  const offAwards=(or&&!or.error)?or.officialAwards||{}:{};
-  const rows=await Promise.all(players.map(async name=>{
-    const d=await api('getPicks',{name});
-    const pts=calcTotalPoints(d.picks||{},official,d.awardPicks||{},offAwards);
-    const apts=calcAwardPoints(d.awardPicks||{},offAwards);
-    const filled=BASE_MATCHES.filter(m=>(d.picks||{})[m.id]&&d.picks[m.id].home!==''&&d.picks[m.id].away!=='').length;
-    const afilled=AWARDS.filter(a=>(d.awardPicks||{})[a.id]&&d.awardPicks[a.id].trim()).length;
-    return{name,pts,apts,filled,afilled,locked:d.locked||false};
-  }));
+
+  // Fetch players and results first
+  const pr = await apiWithRetry('getPlayers');
+  const or = await apiWithRetry('getResults');
+  const players = Array.isArray(pr) ? pr : [];
+  const official = (or&&!or.error) ? or.results||{} : {};
+  const offAwards = (or&&!or.error) ? or.officialAwards||{} : {};
+
+  // Fetch picks ONE BY ONE to avoid race conditions and GAS rate limits
+  const rows = [];
+  for(const name of players){
+    const d = await apiWithRetry('getPicks', {name});
+    if(d.error){
+      rows.push({name, pts:0, apts:0, filled:0, afilled:0, locked:false, error:true});
+      continue;
+    }
+    const pts   = calcTotalPoints(d.picks||{}, official, d.awardPicks||{}, offAwards);
+    const apts  = calcAwardPoints(d.awardPicks||{}, offAwards);
+    const filled  = BASE_MATCHES.filter(m=>(d.picks||{})[m.id]&&d.picks[m.id].home!==''&&d.picks[m.id].away!=='').length;
+    const afilled = AWARDS.filter(a=>(d.awardPicks||{})[a.id]&&d.awardPicks[a.id].trim()).length;
+    rows.push({name, pts, apts, filled, afilled, locked:d.locked||false});
+  }
+
   rows.sort((a,b)=>b.pts-a.pts||b.filled-a.filled);
   const medals=['🥇','🥈','🥉'];
   const hasRes=Object.keys(official).length>0||Object.keys(offAwards).length>0;
+
   document.getElementById('app').innerHTML=`
   <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;flex-wrap:wrap;gap:8px">
     <button class="btn btn-outline btn-sm" onclick="setView('admin')">← Volver al panel</button>
-    <div style="font-size:12px;color:var(--txt2)">🔒 Solo visible para el administrador</div>
+    <div style="display:flex;gap:8px;align-items:center">
+      <div style="font-size:12px;color:var(--txt2)">🔒 Solo visible para el administrador</div>
+      <button class="btn btn-sm btn-primary" onclick="renderRankingAsync()">↻ Actualizar</button>
+    </div>
   </div>
   <div class="card">
     <div class="card-hdr">Clasificación general <small>${rows.length} participantes</small></div>
     ${rows.length===0?'<div class="card-body"><div class="info">Aún no hay participantes.</div></div>':
-      rows.map(({name,pts,apts,filled,afilled,locked},i)=>`
+      rows.map(({name,pts,apts,filled,afilled,locked,error},i)=>`
       <div class="rank-row${i===0?' gold':''}">
         <div class="rmed">${medals[i]||`${i+1}.`}</div>
         <div style="flex:1">
-          <div class="rname">${esc(name)} ${locked?'🔒':''}</div>
+          <div class="rname">${esc(name)} ${locked?'🔒':''} ${error?'⚠️':''}</div>
           <div class="rsub">${filled}/${BASE_MATCHES.length} partidos · ${afilled}/${AWARDS.length} premios${hasRes&&apts>0?' · +'+apts+'pts premios':''}</div>
         </div>
         <div><div class="rpts">${pts}</div><div class="rpts-l">puntos</div></div>
@@ -1119,7 +1151,7 @@ async function loadVisorPlayer(name){
   S.visorPlayer = name;
   S.visorData = null;
   document.getElementById('app').innerHTML = '<div class="loading"><div class="spin"></div>Cargando quiniela de '+esc(name)+'...</div>';
-  const d = await api('getPicks', {name});
+  const d = await apiWithRetry('getPicks', {name});
   S.visorData = d.error ? null : d;
   render();
 }
