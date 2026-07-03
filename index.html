@@ -415,7 +415,9 @@ function calcMatchPoints(pick, result, round) {
   const rh=normVal(result.home), ra=normVal(result.away);
   const pickWinner = ph>pa?'home':ph<pa?'away':'draw';
   const resWinner = getRealWinner({...result,home:rh,away:ra});
-  if(!result.penaltyWinner && ph===rh && pa===ra) return 3*mult;
+  // Marcador exacto siempre da 3pts × mult, incluso si hubo penales
+  if(ph===rh && pa===ra) return 3*mult;
+  // Ganador correcto (incluyendo quién ganó en penales) da 1pt × mult
   if(pickWinner===resWinner) return 1*mult;
   return 0;
 }
@@ -426,7 +428,8 @@ function calcMatchStatus(pick, result) {
   const rh=normVal(result.home), ra=normVal(result.away);
   const pw=ph>pa?'home':ph<pa?'away':'draw';
   const rw=getRealWinner({...result,home:rh,away:ra});
-  if(!result.penaltyWinner && ph===rh && pa===ra) return 'exact';
+  // Marcador exacto siempre aplica, incluso con penales
+  if(ph===rh && pa===ra) return 'exact';
   if(pw===rw) return 'winner';
   return 'miss';
 }
