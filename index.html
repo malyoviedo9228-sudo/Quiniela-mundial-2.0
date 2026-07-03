@@ -255,8 +255,9 @@ const MAX_AWARD_PTS = AWARDS.reduce((s,a)=>s+a.pts,0);
 // Teams start as "TBD — Grupo X 1°" until admin sets them
 const ROUNDS = [
   { id:'R16', label:'Dieciseisavos', short:'1/16', multiplier:1 },
-  { id:'QF',  label:'Cuartos',       short:'1/4',  multiplier:2 },
-  { id:'SF',  label:'Semifinales',   short:'1/2',  multiplier:4 },
+  { id:'QF',  label:'Octavos',       short:'1/8',  multiplier:2 },
+  { id:'SF',  label:'Cuartos',       short:'1/4',  multiplier:4 },
+  { id:'F4',  label:'Semifinales',   short:'1/2',  multiplier:6 },
   { id:'3RD', label:'3er Lugar',     short:'3°',   multiplier:6 },
   { id:'F',   label:'Final',         short:'Final',multiplier:8 },
 ];
@@ -286,10 +287,15 @@ function buildInitialMatches() {
   r16pairs.forEach(([ h, a ], i) => {
     m.push({ id:`R16_${i+1}`, round:'R16', slot:i+1, home:h, away:a, homeLabel:h, awayLabel:a });
   });
+  // Octavos (QF) — 8 partidos — IDs ya existentes en Google Sheets
   for(let i=1;i<=8;i++) m.push({id:`QF_${i}`,round:'QF',slot:i,home:`G-R16_${i*2-1}`,away:`G-R16_${i*2}`,homeLabel:'Ganador J'+(i*2-1),awayLabel:'Ganador J'+(i*2)});
-  for(let i=1;i<=4;i++) m.push({id:`SF_${i}`,round:'SF',slot:i,home:`G-QF_${i*2-1}`,away:`G-QF_${i*2}`,homeLabel:'Ganador CF'+(i*2-1),awayLabel:'Ganador CF'+(i*2)});
-  m.push({id:'3RD_1',round:'3RD',slot:1,home:'P-SF_1',away:'P-SF_2',homeLabel:'Perdedor SF1',awayLabel:'Perdedor SF2'});
-  m.push({id:'F_1',round:'F',slot:1,home:'G-SF_1',away:'G-SF_2',homeLabel:'Ganador SF1',awayLabel:'Ganador SF2'});
+  // Cuartos (SF) — 4 partidos
+  for(let i=1;i<=4;i++) m.push({id:`SF_${i}`,round:'SF',slot:i,home:`G-QF_${i*2-1}`,away:`G-QF_${i*2}`,homeLabel:'Ganador Oct.'+(i*2-1),awayLabel:'Ganador Oct.'+(i*2)});
+  // Semifinales (F4) — 2 partidos
+  for(let i=1;i<=2;i++) m.push({id:`F4_${i}`,round:'F4',slot:i,home:`G-SF_${i*2-1}`,away:`G-SF_${i*2}`,homeLabel:'Ganador Ctos.'+(i*2-1),awayLabel:'Ganador Ctos.'+(i*2)});
+  // 3er lugar y Final
+  m.push({id:'3RD_1',round:'3RD',slot:1,home:'P-F4_1',away:'P-F4_2',homeLabel:'Perdedor Semi 1',awayLabel:'Perdedor Semi 2'});
+  m.push({id:'F_1',round:'F',slot:1,home:'G-F4_1',away:'G-F4_2',homeLabel:'Ganador Semi 1',awayLabel:'Ganador Semi 2'});
   return m;
 }
 
