@@ -984,31 +984,41 @@ async function apiWithRetry(action, data={}, retries=3){
 async function renderRankingAsync(){
   document.getElementById('app').innerHTML='<div class="loading"><div class="spin"></div>Cargando ranking...</div>';
 
-  // Fetch players and results first
   const pr = await apiWithRetry('getPlayers');
   const or = await apiWithRetry('getResults');
   const players = Array.isArray(pr) ? pr : [];
   const official = (or&&!or.error) ? or.results||{} : {};
   const offAwards = (or&&!or.error) ? or.officialAwards||{} : {};
 
-  // Fetch picks ONE BY ONE to avoid race conditions and GAS rate limits
   const rows = [];
   for(const name of players){
     const d = await apiWithRetry('getPicks', {name});
     if(d.error){
-      rows.push({name, pts:0, apts:0, filled:0, afilled:0, locked:false, error:true});
+      rows.push({name, pts:0, apts:0, filled:0, afilled:0, locked:false, error:true, roundPts:{}});
       continue;
     }
-    const pts   = calcTotalPoints(d.picks||{}, official, d.awardPicks||{}, offAwards);
-    const apts  = calcAwardPoints(d.awardPicks||{}, offAwards);
-    const filled  = BASE_MATCHES.filter(m=>(d.picks||{})[m.id]&&d.picks[m.id].home!==''&&d.picks[m.id].away!=='').length;
-    const afilled = AWARDS.filter(a=>(d.awardPicks||{})[a.id]&&d.awardPicks[a.id].trim()).length;
-    rows.push({name, pts, apts, filled, afilled, locked:d.locked||false});
+    const pts    = calcTotalPoints(d.picks||{}, official, d.awardPicks||{}, offAwards);
+    const apts   = calcAwardPoints(d.awardPicks||{}, offAwards);
+    const filled = BASE_MATCHES.filter(m=>(d.picks||{})[m.id]&&d.picks[m.id].home!==''&&d.picks[m.id].away!=='').length;
+    const afilled= AWARDS.filter(a=>(d.awardPicks||{})[a.id]&&d.awardPicks[a.id].trim()).length;
+    const roundPts = {};
+    ROUNDS.forEach(r=>{
+      roundPts[r.id] = BASE_MATCHES
+        .filter(m=>m.round===r.id)
+        .reduce((s,m)=>s+calcMatchPoints((d.picks||{})[m.id]||{},(official||{})[m.id]||{},r.id),0);
+    });
+    rows.push({name, pts, apts, filled, afilled, locked:d.locked||false, roundPts});
   }
 
   rows.sort((a,b)=>b.pts-a.pts||b.filled-a.filled);
   const medals=['🥇','🥈','🥉'];
   const hasRes=Object.keys(official).length>0||Object.keys(offAwards).length>0;
+
+  // Table header columns
+  const cols = [
+    ...ROUNDS.map(r=>r.short),
+    '🏅'
+  ];
 
   document.getElementById('app').innerHTML=`
   <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;flex-wrap:wrap;gap:8px">
@@ -1021,15 +1031,41 @@ async function renderRankingAsync(){
   <div class="card">
     <div class="card-hdr">Clasificación general <small>${rows.length} participantes</small></div>
     ${rows.length===0?'<div class="card-body"><div class="info">Aún no hay participantes.</div></div>':
-      rows.map(({name,pts,apts,filled,afilled,locked,error},i)=>`
-      <div class="rank-row${i===0?' gold':''}">
-        <div class="rmed">${medals[i]||`${i+1}.`}</div>
-        <div style="flex:1">
-          <div class="rname">${esc(name)} ${locked?'🔒':''} ${error?'⚠️':''}</div>
-          <div class="rsub">${filled}/${BASE_MATCHES.length} partidos · ${afilled}/${AWARDS.length} premios${hasRes&&apts>0?' · +'+apts+'pts premios':''}</div>
+      rows.map(({name,pts,apts,filled,afilled,locked,error,roundPts},i)=>{
+        const rp = roundPts||{};
+        return `
+      <div class="rank-row${i===0?' gold':''}" style="flex-direction:column;align-items:flex-start;gap:8px">
+        <div style="display:flex;align-items:center;width:100%">
+          <div class="rmed">${medals[i]||`${i+1}.`}</div>
+          <div style="flex:1">
+            <div class="rname">${esc(name)} ${locked?'🔒':''} ${error?'⚠️':''}</div>
+            <div class="rsub">${filled}/${BASE_MATCHES.length} partidos · ${afilled}/${AWARDS.length} premios</div>
+          </div>
+          <div><div class="rpts">${pts}</div><div class="rpts-l">puntos</div></div>
         </div>
-        <div><div class="rpts">${pts}</div><div class="rpts-l">puntos</div></div>
-      </div>`).join('')}
+        <div style="width:100%;overflow-x:auto;padding-bottom:4px">
+          <table style="width:100%;border-collapse:collapse;font-size:12px;min-width:360px">
+            <thead>
+              <tr>
+                ${ROUNDS.map(r=>`<th style="background:var(--verde-dk);color:var(--oro);padding:5px 8px;text-align:center;font-family:var(--fd);font-size:13px;letter-spacing:.5px;border-right:1px solid rgba(255,255,255,.1)">${r.short}</th>`).join('')}
+                <th style="background:var(--verde-dk);color:var(--oro);padding:5px 8px;text-align:center;font-family:var(--fd);font-size:13px">🏅</th>
+                <th style="background:var(--negro);color:var(--oro);padding:5px 8px;text-align:center;font-family:var(--fd);font-size:14px;letter-spacing:.5px">TOTAL</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                ${ROUNDS.map(r=>{
+                  const p=rp[r.id]||0;
+                  return `<td style="padding:6px 8px;text-align:center;font-weight:${p>0?'700':'400'};color:${p>0?'var(--verde)':'var(--txt2)'};background:${p>0?'var(--verde-lt)':'var(--gris)'};border-right:1px solid var(--borde);border-top:1px solid var(--borde)">${p}<span style="font-size:10px;font-weight:400">pts</span></td>`;
+                }).join('')}
+                <td style="padding:6px 8px;text-align:center;font-weight:${apts>0?'700':'400'};color:${apts>0?'var(--oro-dk)':'var(--txt2)'};background:${apts>0?'#fffbea':'var(--gris)'};border-right:1px solid var(--borde);border-top:1px solid var(--borde)">${apts}<span style="font-size:10px;font-weight:400">pts</span></td>
+                <td style="padding:6px 8px;text-align:center;font-weight:700;font-family:var(--fd);font-size:18px;color:var(--rojo);background:#fff8f8;border-top:1px solid var(--borde)">${pts}</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </div>`;
+      }).join('')}
     <div class="footer-note">${hasRes?'Puntos actualizados con resultados reales.':'⏳ Los puntos se actualizan cuando el admin ingresa resultados y premios.'}</div>
   </div>`;
 }
