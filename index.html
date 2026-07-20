@@ -440,6 +440,19 @@ function calcMatchStatus(pick, result) {
   return 'miss';
 }
 
+// Normalize text: remove accents and lowercase
+function normalize(s) {
+  return String(s).toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g,'').trim();
+}
+
+// Check if a pick matches any of the official values (comma-separated, accent-insensitive)
+function awardMatches(pick, official) {
+  if(!pick||!official) return false;
+  const p = normalize(pick);
+  const variants = official.split(',').map(v=>normalize(v)).filter(Boolean);
+  return variants.some(v=>v===p||v.includes(p)||p.includes(v));
+}
+
 function calcTotalPoints(picks, official, awardPicks, officialAwards) {
   const matchPts = BASE_MATCHES.reduce((s,m)=>{
     const pick=picks[m.id], res=official[m.id];
@@ -449,7 +462,7 @@ function calcTotalPoints(picks, official, awardPicks, officialAwards) {
   const awardPts = AWARDS.reduce((s,a)=>{
     const pick=(awardPicks||{})[a.id], res=(officialAwards||{})[a.id];
     if(!pick||!res) return s;
-    return s+(pick.trim().toLowerCase()===res.trim().toLowerCase()?a.pts:0);
+    return s+(awardMatches(pick,res)?a.pts:0);
   },0);
   return matchPts+awardPts;
 }
@@ -458,7 +471,7 @@ function calcAwardPoints(awardPicks, officialAwards) {
   return AWARDS.reduce((s,a)=>{
     const pick=(awardPicks||{})[a.id], res=(officialAwards||{})[a.id];
     if(!pick||!res) return s;
-    return s+(pick.trim().toLowerCase()===res.trim().toLowerCase()?a.pts:0);
+    return s+(awardMatches(pick,res)?a.pts:0);
   },0);
 }
 
@@ -893,7 +906,7 @@ function renderPremios(){
   const cards = AWARDS.map(a=>{
     const pick = S.awardPicks[a.id]||'';
     const official = S.officialAwards[a.id]||'';
-    const isCorrect = official && pick && pick.trim().toLowerCase()===official.trim().toLowerCase();
+    const isCorrect = official && pick && awardMatches(pick, official);
     const isWrong   = official && pick && !isCorrect;
     let cls='award-card'+(isCorrect?' correct':isWrong?' wrong':'');
     let badge='';
@@ -1152,7 +1165,7 @@ function renderVisor(){
         ${AWARDS.map(a=>{
           const pick = (vData.awardPicks||{})[a.id]||'';
           const official = S.officialAwards[a.id]||'';
-          const isCorrect = official && pick && pick.trim().toLowerCase()===official.trim().toLowerCase();
+          const isCorrect = official && pick && awardMatches(pick, official);
           const isWrong = official && pick && !isCorrect;
           return `<div class="award-card${isCorrect?' correct':isWrong?' wrong':''}">
             <div class="award-hdr">
@@ -1274,9 +1287,10 @@ function renderAdmin(){
             <div style="text-align:right;margin-left:auto"><div class="award-pts">${a.pts}</div><div class="award-pts-lbl">pts</div></div>
           </div>
           <div class="award-body">
-            <input type="text" class="award-input" placeholder="Nombre del ganador oficial..."
+            <input type="text" class="award-input" placeholder="Ej: Lionel Messi, Messi, Leo Messi (separa variantes con coma)"
               value="${esc(S.officialAwards[a.id]||'')}"
               oninput="S.officialAwards['${a.id}']=this.value">
+            <div style="font-size:10px;color:var(--txt2);margin-top:4px">💡 Puedes poner varias formas del nombre separadas por coma</div>
           </div>
         </div>`).join('')}
       </div>
